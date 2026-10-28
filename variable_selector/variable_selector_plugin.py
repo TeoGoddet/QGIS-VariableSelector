@@ -22,12 +22,14 @@
  ***************************************************************************/
 """
 import os.path
-from pkg_resources import resource_filename
 
 from qgis.core import QgsApplication
 
-from PyQt5.QtCore import QSettings, QTranslator, qVersion, QCoreApplication
-from PyQt5.QtWidgets import QAction
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, QLocale
+try:
+    from qgis.PyQt.QtWidgets import QAction  # Qt5 (QGIS 3)
+except ImportError:
+    from qgis.PyQt.QtGui import QAction  # Qt6 (QGIS 4)
 
 from .core import DimensionsManager
 
@@ -54,15 +56,14 @@ class VariableSelectorPlugin():
         # initialize plugin directory
         self.plugin_dir = os.path.dirname(__file__)
         # initialize locale
-        locale = QSettings().value('locale/userLocale')[0:2]
-        locale_path = resource_filename("variable_selector", "i18n/{}.qm".format(locale))
+        locale = (QSettings().value('locale/userLocale', '') or QLocale().name())[0:2]
+        locale_path = os.path.join(self.plugin_dir, 'i18n', '{}.qm'.format(locale))
 
+        self.translator = None
         if os.path.exists(locale_path):
             self.translator = QTranslator()
             self.translator.load(locale_path)
-
-            if qVersion() > '4.3.3':
-                QCoreApplication.installTranslator(self.translator)
+            QCoreApplication.installTranslator(self.translator)
 
         # Declare instance attributes
         self.actions = []
@@ -115,14 +116,21 @@ class VariableSelectorPlugin():
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
         self.manager.restore_subset_strings()
+        self.manager.disconnect_signals()
         self.manager.deleteLater()
         for action in self.actions:
             self.iface.removePluginMenu(
                 self.tr(u'&Dimensions selector'),
                 action)
             self.iface.removeToolBarIcon(action)
+        for action in self.dimensionsSelectors:
+            self.toolbar.removeAction(action)
+        self.dimensionsSelectors = []
         # remove the toolbar
+        self.toolbar.deleteLater()
         del self.toolbar
+        if self.translator is not None:
+            QCoreApplication.removeTranslator(self.translator)
 
     def set_active(self, active):
         self.manager.set_active(active)
@@ -134,6 +142,7 @@ class VariableSelectorPlugin():
     def resetSelectors(self):
         for action in self.dimensionsSelectors:
             self.toolbar.removeAction(action)
+        self.dimensionsSelectors = []
         for dimension in self.manager.dimensions():
             if not dimension.active:
                 continue
@@ -147,6 +156,6 @@ class VariableSelectorPlugin():
 
     def showSettings(self):
         dlg = SettingsDialog(self.manager)
-        result = dlg.exec_()
+        result = dlg.exec()
         if result:
             self.resetSelectors()

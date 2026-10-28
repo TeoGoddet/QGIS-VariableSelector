@@ -98,6 +98,18 @@ class DimensionsManager(QObject):
         QgsProject.instance().writeProject.connect(self.write)
         QgsProject.instance().projectSaved.connect(self.saved)
 
+    def disconnect_signals(self):
+        for signal, slot in (
+            (iface.newProjectCreated, self.clear),
+            (iface.projectRead, self.read),
+            (QgsProject.instance().writeProject, self.write),
+            (QgsProject.instance().projectSaved, self.saved),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+
     def clear(self):
         self._dimensions = []
         self.set_active(False)

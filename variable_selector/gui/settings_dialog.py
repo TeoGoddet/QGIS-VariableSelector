@@ -25,16 +25,24 @@
 import os
 import itertools
 
-from qgis.core import QgsProject, QgsMapLayerProxyModel, QgsRasterLayer
+from qgis.core import Qgis, QgsProject, QgsMapLayerProxyModel, QgsRasterLayer
 from qgis.gui import QgsMapLayerComboBox, QgsFieldComboBox
 
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
-from qgis.PyQt.QtCore import pyqtSlot, Qt, QSortFilterProxyModel, QAbstractTableModel, QModelIndex, QVariant
+from qgis.PyQt.QtCore import pyqtSlot, Qt, QSortFilterProxyModel, QAbstractTableModel, QModelIndex, QRegularExpression
 from qgis.PyQt.QtWidgets import QHeaderView, QStyledItemDelegate, QAbstractItemView
 
-from variable_selector.core import Dimension, LayerDimension
-from variable_selector.gui.help import openHelp
+from ..core import Dimension, LayerDimension
+from .help import openHelp
+
+# QgsMapLayerProxyModel.Filter was moved to Qgis.LayerFilter in QGIS 3.34
+VECTOR_LAYER_FILTER = getattr(getattr(Qgis, 'LayerFilter', None), 'VectorLayer', None)
+if VECTOR_LAYER_FILTER is None:
+    VECTOR_LAYER_FILTER = QgsMapLayerProxyModel.VectorLayer
+
+BOOL = 'bool'
+STRING = 'string'
 
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), '..', 'ui', 'settings_dialog.ui'))
@@ -90,24 +98,24 @@ class BaseTableModel(QAbstractTableModel):
         except TypeError:
             return 0
 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole:
-            if orientation == Qt.Horizontal:
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole:
+            if orientation == Qt.Orientation.Horizontal:
                 return self._columns[section]['header']
-            if orientation == Qt.Vertical:
+            if orientation == Qt.Orientation.Vertical:
                 return str(section)
 
     def flags(self, index):
         column_def = self._columns[index.column()]
-        if column_def['type'] == QVariant.Bool:
-            return Qt.ItemFlags(Qt.ItemIsSelectable |
-                                Qt.ItemIsEnabled |
-                                Qt.ItemIsEditable |
-                                Qt.ItemIsUserCheckable)
+        if column_def['type'] == BOOL:
+            return (Qt.ItemFlag.ItemIsSelectable |
+                    Qt.ItemFlag.ItemIsEnabled |
+                    Qt.ItemFlag.ItemIsEditable |
+                    Qt.ItemFlag.ItemIsUserCheckable)
         else:
-            return Qt.ItemFlags(Qt.ItemIsSelectable |
-                                Qt.ItemIsEditable |
-                                Qt.ItemIsEnabled)
+            return (Qt.ItemFlag.ItemIsSelectable |
+                    Qt.ItemFlag.ItemIsEditable |
+                    Qt.ItemFlag.ItemIsEnabled)
 
 
 class DimensionsTableModel(BaseTableModel):
@@ -115,59 +123,60 @@ class DimensionsTableModel(BaseTableModel):
     def _configure(self):
         self._columns = [{
             'name': 'name',
-            'type': QVariant.String,
+            'type': STRING,
             'header': self.tr("Name")
         }, {
             'name': 'options',
-            'type': QVariant.String,
+            'type': STRING,
             'header': self.tr("Choices")
         }, {
             'name': 'table',
-            'type': QVariant.String,
+            'type': STRING,
             'header': self.tr("Table")
         }, {
             'name': 'value_field',
-            'type': QVariant.String,
+            'type': STRING,
             'header': self.tr("Value field")
         }, {
             'name': 'label_field',
-            'type': QVariant.String,
+            'type': STRING,
             'header': self.tr("Label field")
         }, {
             'name': 'active',
-            'type': QVariant.Bool,
+            'type': BOOL,
             'header': self.tr("Active")
         }]
 
-    def data(self, index, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole:
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole:
             item = self._items[index.row()]
             column_def = self._columns[index.column()]
-            if column_def['type'] == QVariant.Bool:
+            if column_def['type'] == BOOL:
                 return ''
             if column_def['name'] == 'table':
                 return item.table.name() if item.table is not None else ''
             return getattr(item, column_def['name'])
-        if role == Qt.EditRole:
+        if role == Qt.ItemDataRole.EditRole:
             item = self._items[index.row()]
             column_def = self._columns[index.column()]
             return getattr(item, column_def['name'])
-        if role == Qt.CheckStateRole:
+        if role == Qt.ItemDataRole.CheckStateRole:
             item = self._items[index.row()]
             column_def = self._columns[index.column()]
-            if column_def['type'] == QVariant.Bool:
-                return Qt.Checked if item.active else Qt.Unchecked
+            if column_def['type'] == BOOL:
+                return Qt.CheckState.Checked if item.active else Qt.CheckState.Unchecked
 
-    def setData(self, index, value, role=Qt.EditRole):
-        if role == Qt.EditRole:
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        if role == Qt.ItemDataRole.EditRole:
             item = self._items[index.row()]
             column_def = self._columns[index.column()]
             setattr(item, column_def['name'], value)
             self.dataChanged.emit(index, index)
-        if role == Qt.CheckStateRole:
+        if role == Qt.ItemDataRole.CheckStateRole:
             item = self._items[index.row()]
             column_def = self._columns[index.column()]
-            setattr(item, column_def['name'], value == Qt.Checked)
+            setattr(item, column_def['name'], Qt.CheckState(value) == Qt.CheckState.Checked)
+            self.dataChanged.emit(index, index)
         return True
 
 
@@ -176,20 +185,20 @@ class LayerDimensionsTableModel(BaseTableModel):
     def _configure(self):
         self._columns = [{
             'name': 'layer',
-            'type': QVariant.String,
+            'type': STRING,
             'header': self.tr("Layer"),
             'persistentEditor': True
         }, {
             'name': 'name',
-            'type': QVariant.String,
+            'type': STRING,
             'header': self.tr("Name")
         }, {
             'name': 'field',
-            'type': QVariant.String,
+            'type': STRING,
             'header': self.tr("Field")
         }, {
             'name': 'active',
-            'type': QVariant.Bool,
+            'type': BOOL,
             'header': self.tr("Active"),
             'persistentEditor': True
         }]
@@ -199,37 +208,38 @@ class LayerDimensionsTableModel(BaseTableModel):
             if item.layer == layer and item.name == name:
                 return True
 
-    def data(self, index, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole:
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole:
             item = self._items[index.row()]
             column_def = self._columns[index.column()]
-            if column_def['type'] == QVariant.Bool:
+            if column_def['type'] == BOOL:
                 return ''
             if column_def['name'] == 'layer':
                 return item.layer.name() if item.layer is not None else ''
             return getattr(item, column_def['name'])
-        if role == Qt.EditRole:
+        if role == Qt.ItemDataRole.EditRole:
             item = self._items[index.row()]
             column_def = self._columns[index.column()]
             if column_def['name'] == 'layer':
                 return item.layer
             return getattr(item, column_def['name'])
-        if role == Qt.CheckStateRole:
+        if role == Qt.ItemDataRole.CheckStateRole:
             item = self._items[index.row()]
             column_def = self._columns[index.column()]
-            if column_def['type'] == QVariant.Bool:
-                return Qt.Checked if item.active else Qt.Unchecked
+            if column_def['type'] == BOOL:
+                return Qt.CheckState.Checked if item.active else Qt.CheckState.Unchecked
 
-    def setData(self, index, value, role=Qt.EditRole):
-        if role == Qt.EditRole:
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        if role == Qt.ItemDataRole.EditRole:
             item = self._items[index.row()]
             column_def = self._columns[index.column()]
             setattr(item, column_def['name'], value)
             self.dataChanged.emit(index, index)
-        if role == Qt.CheckStateRole:
+        if role == Qt.ItemDataRole.CheckStateRole:
             item = self._items[index.row()]
             column_def = self._columns[index.column()]
-            setattr(item, column_def['name'], value == Qt.Checked)
+            setattr(item, column_def['name'], Qt.CheckState(value) == Qt.CheckState.Checked)
+            self.dataChanged.emit(index, index)
         return True
 
 
@@ -237,14 +247,14 @@ class LayerDelegate(QStyledItemDelegate):
 
     def createEditor(self, parent, option, index):
         editor = QgsMapLayerComboBox(parent)
-        editor.setFilters(QgsMapLayerProxyModel.VectorLayer)
+        editor.setFilters(VECTOR_LAYER_FILTER)
         editor.layerChanged.connect(self.on_layerChanged)
         return editor
 
     def setEditorData(self, editor, index):
         if not editor:
             return
-        value = index.model().data(index, Qt.EditRole)
+        value = index.model().data(index, Qt.ItemDataRole.EditRole)
         editor.setLayer(value)
 
     def setModelData(self, editor, model, index):
@@ -265,7 +275,7 @@ class FieldDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
         editor = QgsFieldComboBox(parent)
         layer_index = index.model().index(index.row(), self._layer_column_index)
-        layer = index.model().data(layer_index, Qt.EditRole)
+        layer = index.model().data(layer_index, Qt.ItemDataRole.EditRole)
         editor.setLayer(layer)
         editor.fieldChanged.connect(self.on_fieldChanged)
         return editor
@@ -273,7 +283,7 @@ class FieldDelegate(QStyledItemDelegate):
     def setEditorData(self, editor, index):
         if not editor:
             return
-        value = index.model().data(index, Qt.EditRole)
+        value = index.model().data(index, Qt.ItemDataRole.EditRole)
         editor.setField(value)
 
     def setModelData(self, editor, model, index):
@@ -315,8 +325,8 @@ class SettingsDialog(QtWidgets.QDialog, FORM_CLASS):
         self.dimensionsView.setItemDelegateForColumn(value_field_index, FieldDelegate(table_index, self))
         label_field_index = self._dimensions_model.columnIndex('label_field')
         self.dimensionsView.setItemDelegateForColumn(label_field_index, FieldDelegate(table_index, self))
-        self.dimensionsView.horizontalHeader().resizeSections(QHeaderView.ResizeToContents)
-        self.dimensionsView.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.dimensionsView.horizontalHeader().resizeSections(QHeaderView.ResizeMode.ResizeToContents)
+        self.dimensionsView.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.dimensionsView.selectionModel().selectionChanged.connect(self.on_dimensionsView_selectionChanged)
 
         layers_dimensions = [
@@ -327,7 +337,7 @@ class SettingsDialog(QtWidgets.QDialog, FORM_CLASS):
         self._layer_dimensions_model = LayerDimensionsTableModel(layers_dimensions, self)
 
         layer_dimensions_proxy_model = QSortFilterProxyModel(self)
-        layer_dimensions_proxy_model.setSortCaseSensitivity(Qt.CaseInsensitive)
+        layer_dimensions_proxy_model.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         layer_dimensions_proxy_model.setDynamicSortFilter(True)
         layer_dimensions_proxy_model.setSourceModel(self._layer_dimensions_model)
         layer_dimensions_proxy_model.setFilterKeyColumn(self._layer_dimensions_model.columnIndex('name'))
@@ -339,8 +349,8 @@ class SettingsDialog(QtWidgets.QDialog, FORM_CLASS):
         self.layerDimensionsView.setItemDelegateForColumn(layer_index, LayerDelegate(self))
         field_index = self._layer_dimensions_model.columnIndex('field')
         self.layerDimensionsView.setItemDelegateForColumn(field_index, FieldDelegate(layer_index, self))
-        self.layerDimensionsView.horizontalHeader().resizeSections(QHeaderView.ResizeToContents)
-        self.layerDimensionsView.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.layerDimensionsView.horizontalHeader().resizeSections(QHeaderView.ResizeMode.ResizeToContents)
+        self.layerDimensionsView.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
 
     def openHelp(self):
         openHelp()
@@ -362,8 +372,8 @@ class SettingsDialog(QtWidgets.QDialog, FORM_CLASS):
             pattern = '^{}$'.format('|'.join(self.selected_dimensions_names()))
         else:
             pattern = ''
-        self.layerDimensionsView.model().setFilterRegExp(pattern)
-        self.layerDimensionsView.horizontalHeader().resizeSections(QHeaderView.ResizeToContents)
+        self.layerDimensionsView.model().setFilterRegularExpression(QRegularExpression(pattern))
+        self.layerDimensionsView.horizontalHeader().resizeSections(QHeaderView.ResizeMode.ResizeToContents)
 
     @pyqtSlot(name='on_addDimensionButton_clicked')
     def on_addDimensionButton_clicked(self):
@@ -390,7 +400,7 @@ class SettingsDialog(QtWidgets.QDialog, FORM_CLASS):
                     continue
                 items.append(LayerDimension(layer, name, name, True))
         self._layer_dimensions_model.addItems(sorted(items, key=lambda d: d.layer.name()))
-        self.layerDimensionsView.horizontalHeader().resizeSections(QHeaderView.ResizeToContents)
+        self.layerDimensionsView.horizontalHeader().resizeSections(QHeaderView.ResizeMode.ResizeToContents)
 
     @pyqtSlot(name='on_addLayerDimensionButton_clicked')
     def on_addLayerDimensionButton_clicked(self):
